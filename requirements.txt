@@ -1,0 +1,4 @@
+viktor==14.23.0 
+requests>=2.32.3
+pydantic==2.11.5
+
