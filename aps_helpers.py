@@ -1,5 +1,5 @@
 import requests
-import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib.parse
 from models.hubs import HubsList
 from models.projects import ProjectsList
@@ -53,8 +53,6 @@ def get_folder_contents(project_id, folder_id, token) -> FolderContentsList:
     encoded_folder_id = urllib.parse.quote(folder_id) # URL-encode the ID
     url = f"https://developer.api.autodesk.com/data/v1/projects/{project_id}/folders/{encoded_folder_id}/contents"
     response = requests.get(url, headers=headers)
-    # print("***")
-    # print(response.text)
     response.raise_for_status()
     return FolderContentsList.model_validate_json(response.text)  # type: ignore[attr-defined]
 
@@ -72,38 +70,6 @@ def get_item_versions(project_id, item_id, token):
     response.raise_for_status()
     return response.json().get("data", [])
 
-def get_model_views_and_metadata(urn, token):
-    """
-    Retrieves the model views (and their metadata) for a given file URN.
-    The URN must be for a file that has been translated to SVF or SVF2.
-    """
-    encoded_urn = base64.urlsafe_b64encode(urn.encode()).decode().rstrip("=")
-    headers = {"Authorization": f"Bearer {token}"}
-    
-    manifest_url = f"{APS_BASE_URL}/modelderivative/v2/designdata/{encoded_urn}/manifest"
-    manifest_response = requests.get(manifest_url, headers=headers)
-    
-    # If the manifest doesn't exist (404), it means the file was never translated.
-    if manifest_response.status_code == 404:
-        print("    - Info: No derivative manifest found. File has not been translated.")
-        return None
-    
-    # For any other error, raise it.
-    manifest_response.raise_for_status()
-    manifest = manifest_response.json()
-
-    if manifest.get('status') != 'success':
-        print(f"    - Translation status for {urn}: {manifest.get('status')} ({manifest.get('progress', '')})")
-        return None
-
-    metadata_url = f"{APS_BASE_URL}/modelderivative/v2/designdata/{encoded_urn}/metadata"
-    metadata_response = requests.get(metadata_url, headers=headers)
-    
-    if metadata_response.status_code == 200:
-        return metadata_response.json().get("data", {}).get("metadata", [])
-    else:
-        print(f"    - Could not retrieve metadata for {urn}. Status: {metadata_response.status_code}")
-        return None
 
 def get_hub_names(token):
     """Return a list of hub names for the given token."""
@@ -121,11 +87,13 @@ def get_hub_id_by_name(token, hub_name):
             if getattr(hub.attributes, "name", None) == hub_name:
                 return hub.id
     return None
+
 def get_all_cad_file_from_hub(
     token: str,
     hub_id: str | None = None,
     *,
     include_views: bool = False,
+    max_workers: int = 12,
 ) -> dict[str, dict[str, str]]:
     """
     Walk through the Autodesk APS hub structure and collect viewable CAD files.
@@ -134,123 +102,167 @@ def get_all_cad_file_from_hub(
     Always returns a dict (possibly empty).
     """
 
-    all_viewables: dict[str, dict[str, str]] = {}
+    def process_top_folder(project_id_with_prefix: str, folder_id: str, executor: ThreadPoolExecutor) -> dict[str, dict[str, str]]:
+        """Worker to crawl a top folder (and its subtree)."""
+        return (
+            get_all_cad_from_folder(
+                project_id_with_prefix,
+                folder_id,
+                token,
+                indent="    ",
+                include_views=include_views,
+                executor=executor,
+            )
+            or {}
+        )
 
-    def process_hub(_hub_id: str) -> None:
-        nonlocal all_viewables
+    def process_hub(_hub_id: str, executor: ThreadPoolExecutor) -> dict[str, dict[str, str]]:
+        hub_viewables: dict[str, dict[str, str]] = {}
         projects = get_projects(_hub_id, token)
         if projects and projects.data:
             for project in projects.data:
-                project_name = project.attributes.name
                 project_id_with_prefix = project.id  # already prefixed (e.g., "b.")
-                # print(f"  Project: {project_name} (ID: {project_id_with_prefix})")
-
                 top_folders = get_top_folders(_hub_id, project_id_with_prefix, token)
                 if top_folders and top_folders.data:
-                    for folder in top_folders.data:
-                        viewables = get_all_cad_from_folder(
-                            project_id_with_prefix,
-                            folder.id,
-                            token,
-                            indent="    ",
-                            include_views=include_views,
-                        )
-                        if viewables:
-                            all_viewables.update(viewables)
+                    futures = [
+                        executor.submit(process_top_folder, project_id_with_prefix, folder.id, executor)
+                        for folder in top_folders.data
+                    ]
+                    for fut in as_completed(futures):
+                        try:
+                            viewables = fut.result()
+                            if viewables:
+                                hub_viewables.update(viewables)
+                        except Exception:
+                            pass
+        return hub_viewables
 
-    # If a specific hub_id is provided, process only that hub
+    # Determine which hubs to process
+    hub_ids: list[str]
     if hub_id:
-        process_hub(hub_id)
-        return all_viewables
+        hub_ids = [hub_id]
+    else:
+        hubs = get_hubs(token)
+        if not hubs or not hubs.data:
+            return {}
+        hub_ids = [h.id for h in hubs.data]
 
-    # Otherwise, enumerate all hubs available to this token
-    hubs = get_hubs(token)
-    if not hubs or not hubs.data:
-        print("No hubs found for this token.")
-        return {}
-
-    for hub in hubs.data:
-        hub_name = hub.attributes.name
-        _hub_id = hub.id
-        print(f"Hub: {hub_name} (ID: {_hub_id})")
-        process_hub(_hub_id)
+    # Execute concurrently across hubs and folders
+    all_viewables: dict[str, dict[str, str]] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        hub_futures = {executor.submit(process_hub, _hid, executor): _hid for _hid in hub_ids}
+        for fut in as_completed(hub_futures):
+            try:
+                hub_result = fut.result()
+                if hub_result:
+                    all_viewables.update(hub_result)
+            except Exception:
+                pass
 
     return all_viewables
 
 
-def get_all_cad_from_folder(project_id, folder_id, token, indent="", *, include_views: bool = False):
+def get_all_cad_from_folder(
+    project_id,
+    folder_id,
+    token,
+    indent="",
+    *,
+    include_views: bool = False,
+    executor: ThreadPoolExecutor | None = None,
+):
     """
-    Recursively traverses a folder and its subfolders, printing contents.
+    Recursively traverses a folder and its subfolders. If an executor is provided,
+    subfolders and items are processed concurrently; otherwise, processed serially.
     """
     viewable_files: dict[str, dict[str, str]] = {}
+
     try:
         contents = get_folder_contents(project_id, folder_id, token)
-    except requests.exceptions.HTTPError as e:
-        print(f"{indent}[Error accessing folder {folder_id}: {e}]")
-        return viewable_files  # return an empty dict, not None
+    except requests.exceptions.HTTPError:
+        return viewable_files  # silent: return empty on access errors
 
     if not contents.data:
         return viewable_files
 
-    for content in contents.data:
+    # Helpers for item and folder processing
+    def process_item(content) -> dict[str, dict[str, str]]:
         try:
             display_name = content.attributes.displayName
-            content_type = content.type  # 'folders' or 'items'
             content_id = content.id
+            supported_extensions = [
+                ".rvt",
+                ".dwg",
+                ".ifc",
+                ".step",
+                ".stp",
+                ".iam",
+                ".ipt",
+            ]
+            if not any(display_name.lower().endswith(ext) for ext in supported_extensions):
+                return {}
+            versions = get_item_versions(project_id, content_id, token)
+            if not versions:
+                return {}
+            latest_version = versions[0]
+            version_urn = latest_version["id"]
 
-            # print(f"{indent}{content_type.capitalize()[:-1]}: {display_name}")
+            if include_views:
+                try:
+                    _ = get_model_views_and_metadata(version_urn, token)
+                except Exception:
+                    pass
+            return {display_name: {"urn": version_urn}}
+        except Exception:
+            return {}
 
-            if content_type == "folders":
-                # Capture and merge the returned data
-                sub_viewables = get_all_cad_from_folder(
-                    project_id, content_id, token, indent + "  "
-                )
-                if sub_viewables:
-                    viewable_files.update(sub_viewables)
-
-            elif content_type == "items":
-                supported_extensions = [
-                    ".rvt",
-                    ".dwg",
-                    ".ifc",
-                    ".step",
-                    ".stp",
-                    ".iam",
-                    ".ipt",
-                ]
-                if any(
-                    display_name.lower().endswith(ext) for ext in supported_extensions
-                ):
-                    versions = get_item_versions(
-                        project_id, content_id, token
-                    )
-                    if versions:
-                        latest_version = versions[0]
-                        version_urn = latest_version["id"]
-                        print(f"{indent}  - Latest Version URN: {version_urn}")
-                        viewable_files[display_name] = {"urn": version_urn}
-                        if include_views:
-                            model_views = get_model_views_and_metadata(
-                                version_urn, token
-                            )
-                            if model_views:
-                                for view in model_views:
-                                    print(
-                                        f"{indent}    - View: {view.get('name')}, "
-                                        f"GUID: {view.get('guid')}"
-                                    )
-                else:
-                    print(f"{indent}  - (Skipping derivative check for non‑CAD file)")
-
-        except (requests.exceptions.HTTPError, AttributeError) as item_error:
-            display_name_for_error = "Unknown"
-            if hasattr(content, "attributes") and hasattr(
-                content.attributes, "displayName"
-            ):
-                display_name_for_error = content.attributes.displayName
-            print(
-                f"{indent}  [Could not process item {display_name_for_error}: {item_error}]"
+    def process_folder(content) -> dict[str, dict[str, str]]:
+        try:
+            return get_all_cad_from_folder(
+                project_id,
+                content.id,
+                token,
+                indent + "  ",
+                include_views=include_views,
+                executor=executor,
             )
+        except Exception:
+            return {}
+
+    if executor is None:
+        # Serial path
+        for content in contents.data:
+            try:
+                content_type = content.type  # 'folders' or 'items'
+                if content_type == "folders":
+                    sub_viewables = process_folder(content)
+                    if sub_viewables:
+                        viewable_files.update(sub_viewables)
+                elif content_type == "items":
+                    item_result = process_item(content)
+                    if item_result:
+                        viewable_files.update(item_result)
+            except Exception:
+                continue
+        return viewable_files
+
+    # Concurrent path using provided executor
+    futures = []
+    for content in contents.data:
+        try:
+            if content.type == "folders":
+                futures.append(executor.submit(process_folder, content))
+            elif content.type == "items":
+                futures.append(executor.submit(process_item, content))
+        except Exception:
+            continue
+
+    for fut in as_completed(futures):
+        try:
+            res = fut.result()
+            if res:
+                viewable_files.update(res)
+        except Exception:
             continue
 
     return viewable_files

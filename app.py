@@ -11,7 +11,7 @@ class APSView(vkt.WebView):
 
 def get_view_options(params, **kwargs):
     """
-    Fetch the list of views by parsing the derivative manifest 
+    Fetch the list of 3D and 2D views by parsing the derivative manifest 
     and returning OptionListElements with the correct "view" GUID.
     """
     if not params.viewable_file:
@@ -20,7 +20,7 @@ def get_view_options(params, **kwargs):
     viewable_dict = get_viewable_files_dict(params, **kwargs)
     urn = viewable_dict.get(params.viewable_file, {}).get("urn")
     if not urn:
-        return [vkt.OptionListElement(label="Could not find URN for the selected file", value=None)]
+        return ["Could not find URN for the selected file"]
 
     integration = vkt.external.OAuth2Integration("aps-integration-1")
     token = integration.get_access_token()
@@ -41,23 +41,32 @@ def get_view_options(params, **kwargs):
     # Find the main derivative with viewable geometry
     for derivative in manifest.get("derivatives", []):
         if derivative.get("outputType") in ["svf", "svf2"]:
-            # Find the parent geometry nodes (e.g., "{3D}", "Analytical Model")
+            # Find the parent geometry nodes for both 3D and 2D
             for geometry_node in derivative.get("children", []):
-                if geometry_node.get("type") == "geometry" and geometry_node.get("role") == "3d":
+                
+                # --- MODIFIED LOGIC TO INCLUDE 2D ---
+                # Check if the node is a geometry container for a 3D or 2D view
+                if geometry_node.get("type") == "geometry" and geometry_node.get("role") in ["3d", "2d"]:
                     view_name = geometry_node.get("name")
                     view_guid = None
-                    # --- THIS IS THE CORRECTED LOGIC ---
-                    # Search children for the node with "type": "view"
+                    view_role = geometry_node.get("role") # '3d' or '2d'
+
+                    # Search its children for the actual node with "type": "view"
                     for child_node in geometry_node.get("children", []):
                         if child_node.get("type") == "view":
                             view_guid = child_node.get("guid")
+                            if child_node.get("name").startswith("Sheet:"):
+                                view_name = child_node.get("name")
                             break # Found the correct view node
                     
                     if view_name and view_guid:
-                        options.append(vkt.OptionListElement(label=view_name, value=view_guid))
+                        # I added this prefix but can be ommited
+                        label_prefix = "[3D]" if view_role == "3d" else "[2D]"
+                        options.append(vkt.OptionListElement(label=f"{label_prefix} {view_name}", value=view_guid))
 
     if not options:
-        return [vkt.OptionListElement(label="No 3D views found in the manifest", value=None)]
+        return [vkt.OptionListElement(label="No 3D or 2D views found in manifest", value=None)]
+    
     
     return options
 
@@ -90,10 +99,11 @@ def get_viewable_files_names(params, **kwargs) -> list[str]:
 
 
 class Parametrization(vkt.Parametrization):
-    title = vkt.Text("# Data Exchange - Viktor Integration")
+    title = vkt.Text("# Viewables APS - Viktor Integration")
     hubs = vkt.OptionField("Avaliable Hubs", options=get_hub_list)
     # Provide a list of file names as options; never return None
     viewable_file = vkt.OptionField("Available Viewables", options=get_viewable_files_names)
+    br = vkt.LineBreak()
     select_view = vkt.OptionField("Select View", options=get_view_options)
 
 class Controller(vkt.Controller):

@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>APS Viewer (with logs)</title>
+  <title>APS Viewer</title>
   <link rel="stylesheet"
         href="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/style.min.css"
         type="text/css">
@@ -20,39 +20,18 @@
 </head>
 <body>
   <div id="apsViewerDiv"></div>
-  <div id="status">Initializing…</div>
 
   <script>
-    // -------------------------
-    // Injected by VIKTOR
-    // -------------------------
+
     var ACCESS_TOKEN = 'APS_TOKEN_PLACEHOLDER';
-    // The placeholder now receives the raw URN, so we assign it directly.
     var DOCUMENT_URN = 'urn:URN_PLACEHOLDER';
-    var TARGET_GUID  = 'VIEW_GUID_PLACEHOLDER';       // may be empty => default view
+    var TARGET_GUID  = 'VIEW_GUID_PLACEHOLDER';
 
-    // -------------------------
-    // Logging helpers
-    // -------------------------
-    console.log("New Code!")
-    const TAG = '[APS]';
-    const statusEl = document.getElementById('status');
 
-    function maskToken(t) {
-      if (!t || t.length < 16) return '(none)';
-      return t.slice(0, 8) + '…' + t.slice(-8);
-    }
-    function setStatus(msg) {
-      statusEl.textContent = msg;
-      console.log(TAG, msg);
-    }
-    function appendStatus(msg) {
-      statusEl.textContent += '\n' + msg;
-      console.log(TAG, msg);
-    }
-    function logObj(label, obj) {
-      try { console.log(TAG, label, obj); } catch (_) {}
-    }
+  const statusEl = document.getElementById('status');
+  function setStatus(_msg) { /* no-op (silenced) */ }
+  function appendStatus(_msg) { /* no-op (silenced) */ }
+  function logObj(_label, _obj) { /* no-op (silenced) */ }
     function describeNode(node) {
       if (!node) return null;
       let type = null, role = null;
@@ -85,18 +64,9 @@
             return false;
         }
     }
-    // Global error logging
-    window.addEventListener('error', (e) => console.error(TAG, 'window.onerror', e.error || e.message));
-    window.addEventListener('unhandledrejection', (e) => console.error(TAG, 'unhandledrejection', e.reason));
 
     // Avoid Mixpanel/localStorage in sandboxed iframes
-    try { Autodesk.Viewing.Private.analytics.optOut(); } catch (e) {
-      console.warn(TAG, 'analytics.optOut unavailable:', e);
-    }
-
-    console.log(TAG, 'Token:', maskToken(ACCESS_TOKEN));
-    console.log(TAG, 'DOCUMENT_URN:', DOCUMENT_URN);
-    console.log(TAG, 'TARGET_GUID:', TARGET_GUID || '(default)');
+  try { Autodesk.Viewing.Private.analytics.optOut(); } catch (e) { /* silent */ }
 
     const initT0 = performance.now();
     
@@ -107,50 +77,28 @@
         accessToken: ACCESS_TOKEN 
       },
       function () {
-        appendStatus('Initializer ready. Loading document…');
+        // silenced
         const t0 = performance.now();
         Autodesk.Viewing.Document.load(
           DOCUMENT_URN,
           function onSuccess(doc) {
             const t1 = performance.now();
-            appendStatus(`Document loaded in ${(t1 - t0).toFixed(0)} ms`);
-            logObj('Document', doc);
 
             try {
               const container = document.getElementById('apsViewerDiv');
               const viewer = new Autodesk.Viewing.GuiViewer3D(container);
               viewer.start();
-              appendStatus('Viewer started.');
-
-              // Useful viewer events
-              viewer.addEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, () =>
-                appendStatus('GEOMETRY_LOADED_EVENT'));
-              viewer.addEventListener(Autodesk.Viewing.MODEL_ROOT_LOADED_EVENT, () =>
-                appendStatus('MODEL_ROOT_LOADED_EVENT'));
-              viewer.addEventListener(Autodesk.Viewing.MODEL_ADDED_EVENT, () =>
-                appendStatus('MODEL_ADDED_EVENT'));
-              viewer.addEventListener(Autodesk.Viewing.MODEL_REMOVED_EVENT, () =>
-                appendStatus('MODEL_REMOVED_EVENT'));
-
               const root = doc.getRoot();
-              logObj('Root node', describeNode(root));
 
               // Resolve target node
               let node = null;
               if (TARGET_GUID) {
                 node = root.findByGuid(TARGET_GUID);
-                if (!node) {
-                  appendStatus('GUID not found in bubble. Falling back to default geometry.');
-                } else {
-                  logObj('Matched node', describeNode(node));
-                }
               }
 
               if (!node) {
                 const defNode = root.getDefaultGeometry();
-                logObj('Default geometry node', describeNode(defNode));
                 if (!defNode) {
-                  setStatus('No default viewable found in document.');
                   return;
                 }
                 loadByNode(viewer, doc, defNode);
@@ -159,63 +107,46 @@
 
               loadByNode(viewer, doc, node);
             } catch (err) {
-              console.error(TAG, 'onDocumentLoadSuccess handler error:', err);
-              setStatus('Unexpected error after document load. See console.');
             }
           },
           function onFailure(code, message) {
             const t1 = performance.now();
-            setStatus(`Failed to load document: ${message || code} (in ${(t1 - t0).toFixed(0)} ms)`);
-            console.error(TAG, 'Document.load failure', { code, message, urn: DOCUMENT_URN });
           }
         );
       }
     );
 
     function loadByNode(viewer, doc, node) {
-      const info = describeNode(node);
-      logObj('loadByNode -> node', info);
+      // silenced
 
       if (isViewOrGeom(node)) {
-        appendStatus(`Loading view/geometry: ${info.name || info.guid || '(unnamed)'}`);
         const t0 = performance.now();
         viewer.loadDocumentNode(doc, node, { keepCurrentModels: false })
           .then(() => {
             const t1 = performance.now();
-            setStatus(`Loaded view: ${info.name || info.guid || '(view)'} in ${(t1 - t0).toFixed(0)} ms`);
           })
           .catch((e) => {
-            console.error(TAG, 'loadDocumentNode error:', e);
-            setStatus('Failed to load view. See console.');
           });
         return;
       }
 
       if (isResource(node)) {
         const path = doc.getViewablePath(node);
-        logObj('Resource path', path);
         if (path) {
-          appendStatus('Loading resource via loadModel…');
           const t0 = performance.now();
           viewer.loadModel(path, {},
             () => {
               const t1 = performance.now();
-              setStatus(`Loaded model resource in ${(t1 - t0).toFixed(0)} ms`);
             },
             (e) => {
-              console.error(TAG, 'loadModel error:', e);
-              setStatus('Failed to load model resource. See console.');
             }
           );
           return;
         }
       }
-
-      setStatus('No loadable node resolved for the given GUID.');
     }
 
     const initT1 = performance.now();
-    console.log(TAG, `Bootstrap JS executed in ${(initT1 - initT0).toFixed(0)} ms`);
   </script>
 </body>
 </html>
