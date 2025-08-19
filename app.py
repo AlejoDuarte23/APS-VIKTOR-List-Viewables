@@ -44,8 +44,6 @@ def get_view_options(params, **kwargs):
             # Find the parent geometry nodes for both 3D and 2D
             for geometry_node in derivative.get("children", []):
                 
-                # --- MODIFIED LOGIC TO INCLUDE 2D ---
-                # Check if the node is a geometry container for a 3D or 2D view
                 if geometry_node.get("type") == "geometry" and geometry_node.get("role") in ["3d", "2d"]:
                     view_name = geometry_node.get("name")
                     view_guid = None
@@ -101,7 +99,6 @@ def get_viewable_files_names(params, **kwargs) -> list[str]:
 class Parametrization(vkt.Parametrization):
     title = vkt.Text("# Viewables APS - Viktor Integration")
     hubs = vkt.OptionField("Avaliable Hubs", options=get_hub_list)
-    # Provide a list of file names as options; never return None
     viewable_file = vkt.OptionField("Available Viewables", options=get_viewable_files_names)
     br = vkt.LineBreak()
     select_view = vkt.OptionField("Select View", options=get_view_options)
@@ -109,9 +106,9 @@ class Parametrization(vkt.Parametrization):
 class Controller(vkt.Controller):
     parametrization = Parametrization(width=40)
 
-    @vkt.WebView("Forge Viewer", duration_guess=5)
+    @vkt.WebView("APS Viewer", duration_guess=5)
     def viewer_page(self, params, **kwargs):
-        """WebView that loads the Forge Viewer with the selected view GUID."""
+        """WebView that loads the APS Viewer with the selected view GUID."""
         selected_guid = params.select_view
         print(selected_guid)
         integration = vkt.external.OAuth2Integration("aps-integration-1")
@@ -122,7 +119,7 @@ class Controller(vkt.Controller):
 
         encoded_urn = base64.urlsafe_b64encode(urn.encode()).decode().rstrip("=")
 
-        html = (Path(__file__).parent / "ViewableViewer.html").read_text() # Adjust path if needed
+        html = (Path(__file__).parent / "ViewableViewer.html").read_text()
         html = html.replace("APS_TOKEN_PLACEHOLDER", token)
         html = html.replace("URN_PLACEHOLDER", encoded_urn) # Pass the ENCODED urn
         html = html.replace("VIEW_GUID_PLACEHOLDER", selected_guid or "")

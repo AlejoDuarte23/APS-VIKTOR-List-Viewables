@@ -17,7 +17,6 @@ def get_hubs(token) -> HubsList:
     headers = {"Authorization": f"Bearer {token}"}
     response = requests.get(f"{APS_BASE_URL}/project/v1/hubs", headers=headers)
     response.raise_for_status()
-    # print(response.text)
     hubs_data = HubsList.model_validate_json(response.text)  # type: ignore[attr-defined]
     return hubs_data
 
@@ -29,7 +28,6 @@ def get_projects(hub_id, token) -> ProjectsList:
     headers = {"Authorization": f"Bearer {token}"}
     response = requests.get(f"{APS_BASE_URL}/project/v1/hubs/{hub_id}/projects", headers=headers)
     response.raise_for_status()
-    # print(response.text)
     return ProjectsList.model_validate_json(response.text)  # type: ignore[attr-defined]
 
 def get_top_folders(hub_id, project_id, token) -> FoldersList:
@@ -40,7 +38,6 @@ def get_top_folders(hub_id, project_id, token) -> FoldersList:
     headers = {"Authorization": f"Bearer {token}"}
     response = requests.get(f"{APS_BASE_URL}/project/v1/hubs/{hub_id}/projects/{project_id}/topFolders", headers=headers)
     response.raise_for_status()
-    # print("[DEBUG]", f"{response.text=}")
     return FoldersList.model_validate_json(response.text)  # type: ignore[attr-defined]
 
 
