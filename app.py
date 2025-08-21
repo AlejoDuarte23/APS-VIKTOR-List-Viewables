@@ -22,7 +22,7 @@ def get_view_options(params, **kwargs):
     if not urn:
         return ["Could not find URN for the selected file"]
 
-    integration = vkt.external.OAuth2Integration("aps-integration-1")
+    integration = vkt.external.OAuth2Integration("aps-integration-viktor")
     token = integration.get_access_token()
     
     encoded_urn = base64.urlsafe_b64encode(urn.encode()).decode().rstrip("=")
@@ -71,7 +71,7 @@ def get_view_options(params, **kwargs):
 @vkt.memoize
 def get_viewable_files_dict(params, **kwargs) -> dict[str, dict[str, str]]:
     """ Return a dictionary with keys -> file name, and vals as a dict of file name and urn"""
-    integration = vkt.external.OAuth2Integration("aps-integration-1")
+    integration = vkt.external.OAuth2Integration("aps-integration-viktor")
     token = integration.get_access_token()
     if not params.hubs:
         # Return an empty dict to avoid NoneType issues upstream
@@ -81,7 +81,7 @@ def get_viewable_files_dict(params, **kwargs) -> dict[str, dict[str, str]]:
     return viewable_dict
 
 def get_hub_list(params, **kwargs) -> list[str]:
-    integration = vkt.external.OAuth2Integration("aps-integration-1")
+    integration = vkt.external.OAuth2Integration("aps-integration-viktor")
     token = integration.get_access_token()
     hub_names = aps_helpers.get_hub_names(token)
     return hub_names if hub_names else ["No hubs found"]
@@ -111,7 +111,7 @@ class Controller(vkt.Controller):
         """WebView that loads the APS Viewer with the selected view GUID."""
         selected_guid = params.select_view
         print(selected_guid)
-        integration = vkt.external.OAuth2Integration("aps-integration-1")
+        integration = vkt.external.OAuth2Integration("aps-integration-viktor")
         token = integration.get_access_token()
         viewable_file = params.viewable_file
         viewable_dict = get_viewable_files_dict(params, **kwargs)
